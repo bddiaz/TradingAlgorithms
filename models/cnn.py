@@ -4,7 +4,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import csv
 import numpy as np
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Dataset
+
+
+'''
+get targets from csv file
+'''
 
 with open('C:\\Users\\17732\Documents\\TradingScheme\\data\\oneMinutePriceDataFinal.csv','r') as price_file:
     csv_reader = csv.DictReader(price_file)
@@ -15,11 +20,11 @@ with open('C:\\Users\\17732\Documents\\TradingScheme\\data\\oneMinutePriceDataFi
 total = len(data['direction'])-1
 
 x = []
-tensor2 = torch.FloatTensor([[1],[0],[0]])
-tensor1 = torch.FloatTensor([[0],[1],[0]])
-tensor0 = torch.FloatTensor([[0],[0],[1]])
+tensor2 = torch.Tensor([2])
+tensor1 = torch.FloatTensor([1])
+tensor0 = torch.FloatTensor([0])
 
-for i in range(5000):
+for i in range(15000):
     if (float(data['direction'][total-i]))==2:
         x.append(tensor2)
     elif (float(data['direction'][total-i]))==1:
@@ -29,10 +34,16 @@ for i in range(5000):
 
 targets = x[0]
 
-for i in range(1,len(x)):
-    targets = torch.cat((targets,x[i]),dim=1)
 
-#print(targets.shape)
+for i in range(1,len(x)):
+    targets = torch.cat((targets,x[i]),dim=0)
+
+
+
+#print(targets)
+'''
+get features from csv file (indciator data and price data)
+'''
 
 with open('C:\\Users\\17732\\Documents\\TradingScheme\\data\\oneMinuteIndicatorDataFinal.csv','r') as indicator_file:
     csv_reader = csv.DictReader(indicator_file)
@@ -50,14 +61,17 @@ for feature in features:
     featuresList.append(temp)
 
 tempX = torch.FloatTensor(featuresList)
-#print(tempX.shape)
 tempX -= torch.reshape(torch.mean(tempX,dim=1),(21,1))
 tempX /= torch.reshape(torch.std(tempX,dim=1),(21,1))
 X = tempX
-X = X.narrow(1,0,5000)
 
-print(X.shape)
-print(targets.shape)
+# limit to first 5000 examples
+X = X.narrow(1,0,15000)
+X = torch.transpose(X,0,1)
+
+
+
+''' CNN model '''
 
 
 class Cnn(nn.Module):
@@ -75,40 +89,72 @@ class Cnn(nn.Module):
 
     def forward(self, x):
         x = self.relu(self.convLayer1(x))
-        #print(x.shape)
+
         lt = torch.split(x,10,dim=1)[0]
-        #print(lt.shape)
         mt = torch.split(x,10,dim=1)[1]
         st = torch.split(x,10,dim=1)[2]
 
         ltConv = self.relu(self.ltConv(lt))
-        #print(ltConv.shape)
         mtConv = self.relu(self.mtConv(mt))
-        #print(mtConv.shape)
         stConv = self.relu(self.stConv(st))
-        #print(stConv.shape)
 
         x = torch.cat((ltConv,mtConv,stConv),1)
-        #print(x.shape)
         x = torch.flatten(x)
-
-        x = F.softmax(self.linear(x),dim=0)
+        #x = F.softmax(self.linear(x),dim=0)
+        x = self.linear(x)
 
         return x
+
+''' custom data set class'''
+
+class TimeseriesDataset(Dataset):
+    def __init__(self, X, y, seq_len=1):
+        self.X = X
+        self.y = y
+        self.seq_len = seq_len
+
+    def __len__(self):
+        return self.X.__len__() - (self.seq_len-1)
+
+    def __getitem__(self, index):
+        return (self.X[index:index+self.seq_len], self.y[index+self.seq_len-1])
+
+
+
+
+batch_size=4
+trainDS =  TimeseriesDataset(X,targets,seq_len=15)
+trainDL = DataLoader(trainDS,batch_size,shuffle=False)
 
 
 
 net = Cnn()
-learning_rate = .0001
-epochs = 200
+learning_rate = .00001
+epochs = 10
+n_total_steps = len(trainDL)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
 
+for epoch in range(epochs):
+    for i, (features, targets) in enumerate(trainDL):
+        features=torch.transpose(features,1,2)
+        targets = targets.type(torch.LongTensor)
+        outputs= net(features)
+        outputs = torch.reshape(outputs,(1,3))
+        #outputs = outputs.type(torch.LongTensor)
+        #print(outputs.shape)
+        loss = criterion(outputs,targets)
 
-#trainDS = TensorDataset(X,targets)
-#batch_size = 1
-#train_dl = DataLoader(trainDS,batch_size,shuffle = False)
-#optimizer = optim.SGD(net.parameters(), lr = 1e-5)
 
-#test = torch.rand(1,21,15)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if (i+1) % 2000 == 0:
+            print (f'Epoch [{epoch+1}/{epochs}], Step [{i+1}/{n_total_steps}], Loss: {loss.item():.4f}')
+
+print('finish training')
+
+#testout = net(test)
+#print(testout)
